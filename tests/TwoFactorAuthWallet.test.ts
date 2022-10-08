@@ -1,12 +1,13 @@
 import Web3 from 'web3'
 import { ethers, network } from 'hardhat'
 import { expect } from 'chai'
+import { deployMockContract } from 'ethereum-waffle'
+
+import erc20Abi from './abi/erc20.json'
 
 const target = '0x3078303030303030303030303030303030303031'
 const value = 0
 const data = '0x1234'
-
-const ZERO_IN_BYTES32 = '0x' + '0'.repeat(64)
 
 describe("Two Factor Auth Wallet", () => {
 
@@ -23,6 +24,28 @@ describe("Two Factor Auth Wallet", () => {
       await twoFactorAuthWalletContract.deployed();
   
       await twoFactorAuthWalletContract.executeWithSignature(target, value, data, {v, r, s})
+    })
+
+    it('should fail if the transaction is reverted', async () => {
+      const [owner] = await ethers.getSigners();
+      const erc20MockContract = await deployMockContract(owner, erc20Abi);
+
+      const _target = erc20MockContract.address
+      const _value = 0
+      const _data = getCallData(erc20Abi, 'transfer', [target, 100])
+
+      const packedMessage = ethers.utils.solidityPack(["address", "uint256", "bytes"], [_target, _value, _data])
+      const { v, r, s } = hashAndSignWithPrivateKey(packedMessage, signerAccount.privateKey)
+
+      const revertedReason = 'Reverted by test'
+      await erc20MockContract.mock.transfer.withArgs(target, 100).revertsWithReason(revertedReason);
+      
+      const twoFactorAuthWallet = await ethers.getContractFactory("TwoFactorAuthWallet");
+      const twoFactorAuthWalletContract = await twoFactorAuthWallet.deploy(owner.address, signerAccount.address);
+      await twoFactorAuthWalletContract.deployed();
+  
+      await (expect(twoFactorAuthWalletContract.executeWithSignature(_target, _value, _data, {v, r, s})))
+        .to.be.revertedWith(revertedReason)
     })
   
     it('should fail if the signature is from other account', async () => {
@@ -105,7 +128,6 @@ describe("Two Factor Auth Wallet", () => {
 
 });
 
-
 async function passTime(time: number) {
   await network.provider.send("evm_increaseTime", [time])
 }
@@ -122,4 +144,9 @@ function hashAndSignWithPrivateKey(message: string, privateKey: string) {
   const web3 = getWeb3()
   const hashedMessage = ethers.utils.keccak256(message)
   return web3.eth.accounts.sign(hashedMessage, privateKey)
+}
+
+function getCallData(abi: any, functionName: string, args: any) {
+  const contractInterface = new ethers.utils.Interface(abi)
+  return contractInterface.encodeFunctionData(functionName, args ?? [])
 }
