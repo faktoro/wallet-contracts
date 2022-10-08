@@ -7,9 +7,15 @@ contract TwoFactorAuthWallet {
     address public authenticatorSigner;
     uint256 public _nonce;
 
-    uint256 private timeToWaitForPendingTransactions = 1000;
+    uint256 public timeToWaitForPendingTransactions = 60 * 60 * 24 * 3; // 3 days
 
-    PendingTransaction[] private _pendingTransactions;
+    PendingTransaction[] public pendingTransactions;
+    ExtraSigner public extraSigner;
+
+    struct ExtraSigner {
+        address signer;
+        uint256 validUntil;
+    }
 
     struct Signature {
         uint8 v;
@@ -41,22 +47,37 @@ contract TwoFactorAuthWallet {
         _;
     }
 
+    modifier onlyInternal() {
+        require(msg.sender == address(this), "Only internal calls");
+        _;
+    }
+
     constructor(address _owner, address _authenticatorSigner) {
         owner = _owner;
         authenticatorSigner = _authenticatorSigner;
+        extraSigner.signer = address(0);
     }
 
     function nonce() public view returns (uint256) {
         return _nonce;
     }
 
+    function setTimeToWait(uint256 timeToWaitInSeconds) public onlyInternal {
+        timeToWaitForPendingTransactions = timeToWaitInSeconds;
+    }
+
+    function setNewSigner(address signer, uint256 timeToOverrideInSecond) public onlyInternal {
+        extraSigner.signer = signer;
+        extraSigner.validUntil = block.timestamp + timeToOverrideInSecond;
+    }
+
     function revokePendingTransaction(uint256 index) public onlyOwner {
-        PendingTransaction storage pendingTransaction = _pendingTransactions[index];
+        PendingTransaction storage pendingTransaction = pendingTransactions[index];
         pendingTransaction.executed = true;
     }
 
     function executePendingTransaction(uint256 index) public onlyOwner {
-        PendingTransaction storage pendingTransaction = _pendingTransactions[index];
+        PendingTransaction storage pendingTransaction = pendingTransactions[index];
         require(!pendingTransaction.executed,
             "Transaction already executed");
         require(pendingTransaction.createdAt + timeToWaitForPendingTransactions < block.timestamp,
@@ -73,8 +94,8 @@ contract TwoFactorAuthWallet {
         uint256 value,
         bytes calldata data) public onlyOwner {
         PendingTransaction memory pendingTransaction = PendingTransaction(target, value, data, block.timestamp, false);
-        _pendingTransactions.push(pendingTransaction);
-        emit PendingTransactionAdded(pendingTransaction, _pendingTransactions.length - 1);
+        pendingTransactions.push(pendingTransaction);
+        emit PendingTransactionAdded(pendingTransaction, pendingTransactions.length - 1);
     }
 
     function executeWithSignature(
@@ -84,7 +105,7 @@ contract TwoFactorAuthWallet {
         Signature calldata signature
     ) public onlyOwner {
         bytes32 hashedMessage = keccak256(abi.encodePacked(target, value, data));
-        require(authenticatorSigner == getSignerAddress(hashedMessage, signature), "Invalid signature");
+        validateSignature(hashedMessage, signature);
         _call(target, value, data);
     }
 
@@ -108,4 +129,17 @@ contract TwoFactorAuthWallet {
         return signer;
     }
 
+    function validateSignature(bytes32 hashedMessage, Signature calldata signature) internal view {
+        address signerAddress = getSignerAddress(hashedMessage, signature);
+
+        if (signerAddress == authenticatorSigner) {
+            return;
+        }
+
+        if (signerAddress == extraSigner.signer && block.timestamp < extraSigner.validUntil) {
+            return;
+        }
+
+        revert("Invalid signature");
+    }
 }
