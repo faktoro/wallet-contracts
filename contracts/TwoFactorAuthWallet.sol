@@ -8,6 +8,12 @@ contract TwoFactorAuthWallet {
     address public authenticatorSigner;
     uint256 public _nonce;
 
+    struct Signature {
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
+    }
+
     // solhint-disable-next-line no-empty-blocks
     receive() external payable {}
 
@@ -28,9 +34,11 @@ contract TwoFactorAuthWallet {
     function exec(
         address target,
         uint256 value,
-        bytes calldata data
+        bytes calldata data,
+        Signature calldata signature
     ) external onlyOwner {
-        //
+        bytes32 hashedMessage = keccak256(abi.encodePacked(target, value, data));
+        require(authenticatorSigner == getSignerAddress(hashedMessage, signature), "Invalid signature");
         _call(target, value, data);
     }
 
@@ -47,10 +55,10 @@ contract TwoFactorAuthWallet {
         }
     }
 
-    function verifyMessage(bytes32 _hashedMessage, uint8 _v, bytes32 _r, bytes32 _s) public pure returns (address) {
+    function getSignerAddress(bytes32 hashedMessage, Signature calldata signature) public pure returns (address) {
         bytes memory prefix = "\x19Ethereum Signed Message:\n32";
-        bytes32 prefixedHashMessage = keccak256(abi.encodePacked(prefix, _hashedMessage));
-        address signer = ecrecover(prefixedHashMessage, _v, _r, _s);
+        bytes32 prefixedHashMessage = keccak256(abi.encodePacked(prefix, hashedMessage));
+        address signer = ecrecover(prefixedHashMessage, signature.v, signature.r, signature.s);
         return signer;
     }
 }
